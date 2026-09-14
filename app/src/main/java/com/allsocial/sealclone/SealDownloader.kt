@@ -29,9 +29,13 @@ class SealDownloader(private val context: Context) {
         ensureInitialized()
         val request = YoutubeDLRequest(url).apply {
             addOption("--no-playlist")
-            // Bot Bypass arguments (Seal default)
-            addOption("--extractor-args", "youtube:player-client=android,ios")
-            addOption("--socket-timeout", "20")
+            addOption("--no-warnings")
+            
+            // PO Token warning bypass: iOS client use karein
+            addOption("--extractor-args", "youtube:player-client=ios,mweb")
+            
+            // Android WebView user-agent
+            addOption("--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1")
         }
         YoutubeDL.getInstance().getInfo(request)
     }
@@ -44,33 +48,25 @@ class SealDownloader(private val context: Context) {
         onProgress: (Float, String) -> Unit
     ) = withContext(Dispatchers.IO) {
         ensureInitialized()
-        val publicDownloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        val downloadDir: File = try {
-            if (publicDownloadDir != null && (publicDownloadDir.exists() || publicDownloadDir.mkdirs()) && publicDownloadDir.canWrite()) {
-                publicDownloadDir
-            } else {
-                context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
-            }
-        } catch (_: Exception) {
-            context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
-        }
+        val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         if (!downloadDir.exists()) {
             downloadDir.mkdirs()
         }
 
         val request = YoutubeDLRequest(url).apply {
+            addOption("--no-warnings")
+            addOption("--extractor-args", "youtube:player-client=ios,mweb")
+
             if (isAudioOnly) {
                 addOption("-x")
                 addOption("--audio-format", "mp3")
                 addOption("--audio-quality", "0")
             } else {
-                // Video + Audio Automatic FFmpeg Merge
                 addOption("-f", "$formatId+bestaudio/best")
                 addOption("--merge-output-format", "mp4")
             }
             addOption("-o", "${downloadDir.absolutePath}/%(title)s.%(ext)s")
             addOption("--no-mtime")
-            addOption("--socket-timeout", "30")
         }
 
         YoutubeDL.getInstance().execute(request) { progress, _, line ->
