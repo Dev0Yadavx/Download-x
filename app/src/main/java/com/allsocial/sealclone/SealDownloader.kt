@@ -24,53 +24,69 @@ class SealDownloader(private val context: Context) {
         }
     }
 
-    // 1. Fetch Video Metadata & Formats
-    suspend fun getMediaInfo(url: String): VideoInfo = withContext(Dispatchers.IO) {
+    // 1. URL sanitization aur Safe Formats Extraction
+    suspend fun getMediaInfo(rawInput: String): VideoInfo = withContext(Dispatchers.IO) {
         ensureInitialized()
-        val request = YoutubeDLRequest(url).apply {
+        val cleanUrl = when {
+            rawInput.startsWith("http://") || rawInput.startsWith("https://") -> rawInput.trim()
+            rawInput.length in 10..15 && !rawInput.contains(" ") -> "https://www.youtube.com/watch?v=${rawInput.trim()}"
+            else -> "ytsearch1:${rawInput.trim()}"
+        }
+
+        val request = YoutubeDLRequest(cleanUrl).apply {
             addOption("--no-playlist")
             addOption("--no-warnings")
-            
-            // PO Token warning bypass: iOS client use karein
-            addOption("--extractor-args", "youtube:player-client=ios,mweb")
-            
-            // Android WebView user-agent
-            addOption("--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1")
+            addOption("--ignore-no-formats-error")
+            // Web + iOS fallback clients taaki saare standard formats return hon
+            addOption("--extractor-args", "youtube:player_client=mweb,ios")
         }
         YoutubeDL.getInstance().getInfo(request)
     }
 
-    // 2. Download with Progress Hook (Exact Seal Method)
+    // 2. Download Format Fallback (Jo "Requested format is not available" ko rokega)
     suspend fun startDownload(
-        url: String,
+        rawInput: String,
         formatId: String,
         isAudioOnly: Boolean,
         onProgress: (Float, String) -> Unit
     ) = withContext(Dispatchers.IO) {
         ensureInitialized()
+        val cleanUrl = if (rawInput.startsWith("http")) rawInput.trim() else "https://www.youtube.com/watch?v=${rawInput.trim()}"
         val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         if (!downloadDir.exists()) {
             downloadDir.mkdirs()
         }
 
-        val request = YoutubeDLRequest(url).apply {
+        val request = YoutubeDLRequest(cleanUrl).apply {
             addOption("--no-warnings")
-            addOption("--extractor-args", "youtube:player-client=ios,mweb")
+            addOption("--extractor-args", "youtube:player_client=mweb,ios")
 
             if (isAudioOnly) {
                 addOption("-x")
                 addOption("--audio-format", "mp3")
-                addOption("--audio-quality", "0")
+                // Fallback audio selection
+                addOption("-f", "ba/b")
             } else {
-                addOption("-f", "$formatId+bestaudio/best")
+                // Agar specific formatId fail ho, to auto-fallback best par chale
+                addOption("-f", "$formatId+ba/bestvideo+bestaudio/best")
                 addOption("--merge-output-format", "mp4")
             }
+
             addOption("-o", "${downloadDir.absolutePath}/%(title)s.%(ext)s")
             addOption("--no-mtime")
         }
 
         YoutubeDL.getInstance().execute(request) { progress, _, line ->
             onProgress(progress, line ?: "")
+        }
+    }
+
+    suspend fun getYtDlpVersion(context: Context): String = withContext(Dispatchers.IO) {
+        ensureInitialized()
+        try {
+            YoutubeDL.getInstance().version(context.applicationContext) ?: "2024.08.06"
+        } catch (e: Exception) {
+            "2024.08.06"
         }
     }
 

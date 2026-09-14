@@ -23,6 +23,8 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.outlined.ContentPaste
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.SettingsSuggest
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,10 +35,12 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import com.yausername.youtubedl_android.mapper.VideoInfo
 import kotlinx.coroutines.launch
@@ -100,6 +104,15 @@ fun SealScreen(initialUrl: String = "") {
     var progressStatusText by remember { mutableStateOf("") }
     var isDownloading by remember { mutableStateOf(false) }
     var isUpdatingEngine by remember { mutableStateOf(false) }
+    var showUpdateDialog by remember { mutableStateOf(false) }
+    var autoUpdateEnabled by remember { mutableStateOf(true) }
+    var currentVersion by remember { mutableStateOf("Loading...") }
+
+    LaunchedEffect(showUpdateDialog) {
+        if (showUpdateDialog) {
+            currentVersion = downloader.getYtDlpVersion(context)
+        }
+    }
 
     LaunchedEffect(initialUrl) {
         if (initialUrl.isNotBlank()) {
@@ -161,31 +174,15 @@ fun SealScreen(initialUrl: String = "") {
                 // Update Engine Button
                 IconButton(
                     onClick = {
-                        if (!isUpdatingEngine) {
-                            isUpdatingEngine = true
-                            scope.launch {
-                                try {
-                                    val status = downloader.updateYtDlp()
-                                    Toast.makeText(context, "yt-dlp status: $status", Toast.LENGTH_SHORT).show()
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "Update check: ${e.message}", Toast.LENGTH_SHORT).show()
-                                } finally {
-                                    isUpdatingEngine = false
-                                }
-                            }
-                        }
+                        showUpdateDialog = true
                     },
                     modifier = Modifier.testTag("update_engine_button")
                 ) {
-                    if (isUpdatingEngine) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    } else {
-                        Icon(
-                            Icons.Default.SystemUpdate,
-                            contentDescription = "Update yt-dlp",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Icon(
+                        Icons.Default.SystemUpdate,
+                        contentDescription = "Update yt-dlp",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
 
@@ -376,10 +373,10 @@ fun SealScreen(initialUrl: String = "") {
                                 scope.launch {
                                     try {
                                         downloader.startDownload(
-                                            url = urlInput.trim(),
+                                            rawInput = urlInput.trim(),
                                             formatId = "bestaudio",
                                             isAudioOnly = true
-                                        ) { p, line ->
+                                        ) { p: Float, line: String ->
                                             downloadProgress = p
                                             progressStatusText = line
                                         }
@@ -438,10 +435,10 @@ fun SealScreen(initialUrl: String = "") {
                                         scope.launch {
                                             try {
                                                 downloader.startDownload(
-                                                    url = urlInput.trim(),
+                                                    rawInput = urlInput.trim(),
                                                     formatId = "best",
                                                     isAudioOnly = false
-                                                ) { p, line ->
+                                                ) { p: Float, line: String ->
                                                     downloadProgress = p
                                                     progressStatusText = line
                                                 }
@@ -486,10 +483,10 @@ fun SealScreen(initialUrl: String = "") {
                                                 scope.launch {
                                                     try {
                                                         downloader.startDownload(
-                                                            url = urlInput.trim(),
+                                                            rawInput = urlInput.trim(),
                                                             formatId = fmt.formatId ?: "best",
                                                             isAudioOnly = false
-                                                        ) { p, line ->
+                                                        ) { p: Float, line: String ->
                                                             downloadProgress = p
                                                             progressStatusText = line
                                                         }
@@ -511,6 +508,149 @@ fun SealScreen(initialUrl: String = "") {
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        if (showUpdateDialog) {
+            UpdateConfigDialog(
+                currentVersion = currentVersion, // e.g. "2026.03.10"
+                isAutoUpdateEnabled = autoUpdateEnabled,
+                onToggleAutoUpdate = { autoUpdateEnabled = it },
+                onUpdateClick = {
+                    scope.launch {
+                        downloader.updateYtDlp()
+                        currentVersion = downloader.getYtDlpVersion(context)
+                        Toast.makeText(context, "Config updated!", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                onDismiss = { showUpdateDialog = false }
+            )
+        }
+    }
+}
+
+@Composable
+fun UpdateConfigDialog(
+    currentVersion: String,
+    isAutoUpdateEnabled: Boolean,
+    onToggleAutoUpdate: (Boolean) -> Unit,
+    onUpdateClick: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = Color(0xFF1E222D), // Modern Dark Slate
+            tonalElevation = 6.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp)
+            ) {
+                // Header
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(bottom = 18.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Info,
+                        contentDescription = null,
+                        tint = Color(0xFF00E5FF),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = "Update Config",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+
+                // Version Badge Card
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.White.copy(alpha = 0.05f))
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Engine Version",
+                        color = Color.Gray,
+                        fontSize = 13.sp
+                    )
+                    Text(
+                        text = currentVersion,
+                        color = Color(0xFF00E5FF),
+                        fontSize = 13.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Auto Toggle Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.SettingsSuggest,
+                        contentDescription = null,
+                        tint = Color.LightGray,
+                        modifier = Modifier.size(22.dp)
+                    )
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Auto-update Config",
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "Fetch latest extractor rules automatically to prevent media errors.",
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                            color = Color.Gray
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Switch(
+                        checked = isAutoUpdateEnabled,
+                        onCheckedChange = onToggleAutoUpdate,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.Black,
+                            checkedTrackColor = Color(0xFF00E5FF)
+                        )
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Actions
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onUpdateClick) {
+                        Text("Update Now", color = Color(0xFF00E5FF), fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    TextButton(onClick = onDismiss) {
+                        Text("OK", color = Color.Gray)
                     }
                 }
             }
