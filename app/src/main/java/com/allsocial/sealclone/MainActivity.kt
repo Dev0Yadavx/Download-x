@@ -1,5 +1,6 @@
 package com.allsocial.sealclone
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -20,6 +21,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -68,9 +70,10 @@ class MainActivity : ComponentActivity() {
     private fun handleIncomingIntent(intent: Intent?) {
         if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
             val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: ""
-            // Regex to extract URL
-            val match = Regex("https?://[\\S]+").find(text)
-            match?.value?.let { sharedUrl = it }
+            // Pure YouTube links extract karne ka accurate regex
+            val urlRegex = Regex("""(https?://[^\s]+)""")
+            val matchedUrl = urlRegex.find(text)?.value ?: text
+            sharedUrl = matchedUrl.trim()
         }
     }
 }
@@ -88,6 +91,47 @@ fun SealMainScreen(initialUrl: String, onUrlConsumed: () -> Unit) {
     var isDownloading by remember { mutableStateOf(false) }
     var downloadProgress by remember { mutableStateOf(0f) }
     var activePlayUrl by remember { mutableStateOf<String?>(null) }
+
+    // Update App Config Dialog states
+    val sharedPrefs = remember { context.getSharedPreferences("seal_app_config", Context.MODE_PRIVATE) }
+    var autoUpdateEnabled by remember {
+        mutableStateOf(sharedPrefs.getBoolean("auto_update_enabled", false))
+    }
+    var showUpdateDialog by remember { mutableStateOf(false) }
+    var ytdlpVersion by remember { mutableStateOf("Loading...") }
+    var isUpdatingYtdlp by remember { mutableStateOf(false) }
+    var updateStatusMessage by remember { mutableStateOf<String?>(null) }
+
+    // Load initial version & handle auto-update toggle
+    LaunchedEffect(Unit) {
+        try {
+            ytdlpVersion = downloader.getYtDlpVersion()
+        } catch (e: Exception) {
+            ytdlpVersion = "2024.08.06"
+        }
+
+        if (autoUpdateEnabled) {
+            scope.launch {
+                try {
+                    downloader.updateYtDlp()
+                    ytdlpVersion = downloader.getYtDlpVersion()
+                } catch (e: Exception) {
+                    // silent fallback on startup
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(showUpdateDialog) {
+        if (showUpdateDialog) {
+            updateStatusMessage = null
+            try {
+                ytdlpVersion = downloader.getYtDlpVersion()
+            } catch (e: Exception) {
+                // keep current
+            }
+        }
+    }
 
     // Auto-fetch if opened via Share Sheet
     LaunchedEffect(initialUrl) {
@@ -119,14 +163,42 @@ fun SealMainScreen(initialUrl: String, onUrlConsumed: () -> Unit) {
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // App Title Bar
-            Text(
-                text = "Seal",
-                color = Color(0xFF00ADB5),
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 12.dp)
-            )
+            // App Title Bar with Update App Config Icon
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Seal",
+                    color = Color(0xFF00ADB5),
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { showUpdateDialog = true }
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SystemUpdate,
+                        contentDescription = "Update App Config",
+                        tint = Color(0xFF00ADB5),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Text(
+                        text = "Update App Config",
+                        color = Color(0xFFEEEEEE),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
 
             // Input Bar
             OutlinedTextField(
@@ -144,27 +216,35 @@ fun SealMainScreen(initialUrl: String, onUrlConsumed: () -> Unit) {
                 trailingIcon = {
                     Row {
                         IconButton(onClick = {
-                            clipboard.getText()?.let { urlInput = it.text }
-                        }) {
-                            Icon(Icons.Outlined.ContentPaste, contentDescription = null, tint = Color.Gray)
-                        }
-                        IconButton(onClick = {
-                            if (urlInput.isNotBlank()) {
-                                isLoading = true
-                                videoInfo = null
-                                activePlayUrl = null
-                                scope.launch {
-                                    try {
-                                        videoInfo = downloader.getMediaInfo(urlInput)
-                                    } catch (e: Exception) {
-                                        Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
-                                    } finally {
-                                        isLoading = false
-                                    }
-                                }
+                            clipboard.getText()?.let {
+                                val raw = it.text.toString()
+                                val urlRegex = Regex("""(https?://[^\s]+)""")
+                                urlInput = urlRegex.find(raw)?.value ?: raw.trim()
                             }
                         }) {
-                            Icon(Icons.Default.Search, contentDescription = null, tint = Color(0xFF00ADB5))
+                            Icon(Icons.Outlined.ContentPaste, contentDescription = "Paste", tint = Color.Gray)
+                        }
+                        IconButton(
+                            onClick = {
+                                if (urlInput.isNotBlank() && !isLoading && !isDownloading) {
+                                    isLoading = true
+                                    videoInfo = null
+                                    activePlayUrl = null
+                                    scope.launch {
+                                        try {
+                                            videoInfo = downloader.getMediaInfo(urlInput)
+                                        } catch (e: Exception) {
+                                            val errorMsg = e.message ?: "Failed to fetch video"
+                                            Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
+                                        } finally {
+                                            isLoading = false
+                                        }
+                                    }
+                                }
+                            },
+                            enabled = !isLoading && !isDownloading
+                        ) {
+                            Icon(Icons.Default.Search, contentDescription = "Search", tint = if (!isLoading && !isDownloading) Color(0xFF00ADB5) else Color.Gray)
                         }
                     }
                 },
@@ -253,20 +333,27 @@ fun SealMainScreen(initialUrl: String, onUrlConsumed: () -> Unit) {
                         // Audio Button
                         Button(
                             onClick = {
-                                isDownloading = true
-                                scope.launch {
-                                    try {
-                                        downloader.startDownload(urlInput, "", true) { p, _ -> downloadProgress = p }
-                                        Toast.makeText(context, "Audio saved to Downloads!", Toast.LENGTH_SHORT).show()
-                                    } catch (e: Exception) {
-                                        Toast.makeText(context, "Audio error: ${e.message}", Toast.LENGTH_SHORT).show()
-                                    } finally {
-                                        isDownloading = false
+                                if (!isDownloading) {
+                                    isDownloading = true
+                                    scope.launch {
+                                        try {
+                                            downloader.startDownload(urlInput, "", true) { p, _ -> downloadProgress = p }
+                                            Toast.makeText(context, "Audio saved to Downloads!", Toast.LENGTH_SHORT).show()
+                                        } catch (e: Exception) {
+                                            val errorMsg = e.message ?: "Audio error"
+                                            Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
+                                        } finally {
+                                            isDownloading = false
+                                        }
                                     }
                                 }
                             },
+                            enabled = !isDownloading,
                             modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00565B)),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF00565B),
+                                disabledContainerColor = Color(0xFF00383B)
+                            ),
                             shape = RoundedCornerShape(12.dp)
                         ) {
                             Icon(Icons.Default.MusicNote, contentDescription = null)
@@ -296,21 +383,28 @@ fun SealMainScreen(initialUrl: String, onUrlConsumed: () -> Unit) {
 
                                     Button(
                                         onClick = {
-                                            isDownloading = true
-                                            scope.launch {
-                                                try {
-                                                    downloader.startDownload(urlInput, fmt.formatId ?: "best", false) { p, _ ->
-                                                        downloadProgress = p
+                                            if (!isDownloading) {
+                                                isDownloading = true
+                                                scope.launch {
+                                                    try {
+                                                        downloader.startDownload(urlInput, fmt.formatId ?: "best", false) { p, _ ->
+                                                            downloadProgress = p
+                                                        }
+                                                        Toast.makeText(context, "Video saved to Downloads!", Toast.LENGTH_SHORT).show()
+                                                    } catch (e: Exception) {
+                                                        val errorMsg = e.message ?: "Download failed"
+                                                        Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
+                                                    } finally {
+                                                        isDownloading = false
                                                     }
-                                                    Toast.makeText(context, "Video saved to Downloads!", Toast.LENGTH_SHORT).show()
-                                                } catch (e: Exception) {
-                                                    Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                                                } finally {
-                                                    isDownloading = false
                                                 }
                                             }
                                         },
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00ADB5)),
+                                        enabled = !isDownloading,
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(0xFF00ADB5),
+                                            disabledContainerColor = Color(0xFF2A4D53)
+                                        ),
                                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
                                     ) {
                                         Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.Black)
@@ -323,6 +417,161 @@ fun SealMainScreen(initialUrl: String, onUrlConsumed: () -> Unit) {
                     }
                 }
             }
+        }
+
+        // Ytdlp Update Dialog: "Update App Config"
+        if (showUpdateDialog) {
+            AlertDialog(
+                onDismissRequest = {
+                    if (!isUpdatingYtdlp) showUpdateDialog = false
+                },
+                containerColor = Color(0xFF161E2E),
+                icon = {
+                    Icon(
+                        imageVector = Icons.Default.SystemUpdate,
+                        contentDescription = "Update App Config",
+                        tint = Color(0xFF00ADB5),
+                        modifier = Modifier.size(32.dp)
+                    )
+                },
+                title = {
+                    Text(
+                        text = "Update App Config",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp
+                    )
+                },
+                text = {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        // Show yt-dlp version
+                        Surface(
+                            color = Color(0xFF0C101A),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(14.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(
+                                        text = "yt-dlp version",
+                                        color = Color.Gray,
+                                        fontSize = 12.sp
+                                    )
+                                    Text(
+                                        text = ytdlpVersion,
+                                        color = Color(0xFF00ADB5),
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                if (isUpdatingYtdlp) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        color = Color(0xFF00ADB5),
+                                        strokeWidth = 2.dp
+                                    )
+                                }
+                            }
+                        }
+
+                        // Auto update on toggle
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFF0C101A))
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                Text(
+                                    text = "Auto update",
+                                    color = Color.White,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "Automatically check & update yt-dlp on launch",
+                                    color = Color.Gray,
+                                    fontSize = 11.sp
+                                )
+                            }
+                            Switch(
+                                checked = autoUpdateEnabled,
+                                onCheckedChange = { isChecked ->
+                                    autoUpdateEnabled = isChecked
+                                    sharedPrefs.edit().putBoolean("auto_update_enabled", isChecked).apply()
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = Color(0xFF00ADB5),
+                                    uncheckedThumbColor = Color.Gray,
+                                    uncheckedTrackColor = Color(0xFF28324A)
+                                )
+                            )
+                        }
+
+                        // Feedback status message
+                        updateStatusMessage?.let { status ->
+                            Text(
+                                text = status,
+                                color = if (status.startsWith("Error")) Color(0xFFFF6B6B) else Color(0xFF4ECCA3),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            isUpdatingYtdlp = true
+                            updateStatusMessage = "Checking and downloading update..."
+                            scope.launch {
+                                try {
+                                    val result = downloader.updateYtDlp()
+                                    val newVer = downloader.getYtDlpVersion()
+                                    ytdlpVersion = newVer
+                                    updateStatusMessage = "yt-dlp is up to date ($result)"
+                                    Toast.makeText(context, "yt-dlp updated successfully!", Toast.LENGTH_SHORT).show()
+                                } catch (e: Exception) {
+                                    val err = e.message ?: "Update failed"
+                                    updateStatusMessage = "Error: $err"
+                                    Toast.makeText(context, "Update failed: $err", Toast.LENGTH_SHORT).show()
+                                } finally {
+                                    isUpdatingYtdlp = false
+                                }
+                            }
+                        },
+                        enabled = !isUpdatingYtdlp,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF00ADB5),
+                            disabledContainerColor = Color(0xFF2A4D53)
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Update now", color = Color.Black, fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { showUpdateDialog = false },
+                        enabled = !isUpdatingYtdlp
+                    ) {
+                        Text("OK", color = Color(0xFFEEEEEE), fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            )
         }
     }
 }
